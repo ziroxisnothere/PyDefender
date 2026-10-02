@@ -1,0 +1,115 @@
+name: Bug Report
+description: Report something in PyDefender that is broken or does not work as expected
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug in PyDefender.
+
+        Please fill out the form below as completely as possible. The more
+        detail you provide (versions, exact commands, full error output),
+        the faster the issue can be reproduced and fixed.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you begin
+      description: Please confirm the following.
+      options:
+        - label: I have searched the existing issues and found no duplicate
+          required: true
+        - label: I am using a supported Python version (3.9 - 3.13)
+          required: true
+        - label: I can reproduce this bug with the latest version of PyDefender
+          required: true
+
+  - type: input
+    id: pydefender-version
+    attributes:
+      label: PyDefender version
+      description: Output of `pydefender --version` (or the commit hash if installed from source).
+      placeholder: pydefender 0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: python-version
+    attributes:
+      label: Python version
+      options:
+        - "3.9"
+        - "3.10"
+        - "3.11"
+        - "3.12"
+        - "3.13"
+        - Other (please specify in the description)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - Windows
+        - macOS
+        - Other (please specify in the description)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: What part of PyDefender is affected?
+      multiple: true
+      options:
+        - CLI (pydefender command)
+        - Obfuscation engine (levels 1-3)
+        - Protected output files
+        - Python API (obfuscate_source / obfuscate_file)
+        - check command / report
+        - Installation / packaging
+        - Other (please specify in the description)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug and the exact steps to reproduce it.
+      placeholder: |
+        1. Run `pydefender obfuscate app.py --level 3`
+        2. Then run the protected file
+        3. See error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Command output and error messages
+      description: Paste the full output, including the traceback if there is one. Do NOT paste any secrets or proprietary source code.
+      render: shell
+
+  - type: textarea
+    id: sample-code
+    attributes:
+      label: Minimal reproduction snippet (optional)
+      description: The smallest Python file that triggers the bug. Do NOT paste proprietary source code.
+      render: python
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Anything else that may help (screenshots, workarounds you tried, when it started happening).

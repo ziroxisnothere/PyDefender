@@ -1,0 +1,75 @@
+name: Feature Request
+description: Suggest a new feature or an improvement for PyDefender
+labels: [enhancement, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping to improve PyDefender.
+
+        Please describe your idea clearly. Feature requests are reviewed
+        against the project goals: a lightweight, dependency-free,
+        standard-library-only Python source protection tool.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you begin
+      options:
+        - label: I have searched the existing issues and found no duplicate
+          required: true
+        - label: I believe this feature fits PyDefender (source-code obfuscation / protection tooling)
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What are you trying to protect, build or achieve? What limitation are you hitting today?
+      placeholder: "When distributing protected scripts to customers, I cannot..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe what you want to happen. Include example CLI usage or API calls if relevant.
+      placeholder: "I would like `pydefender obfuscate --option X` to ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Other tools, workarounds or designs you have tried or evaluated.
+
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Are you willing to help implement this?
+      options:
+        - "Yes, I can submit a pull request"
+        - "Yes, but I would need guidance"
+        - "No, but I can test the feature"
+        - "No"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: importance
+    attributes:
+      label: How important is this feature to you?
+      options:
+        - Blocking - I cannot use PyDefender without it
+        - Important - it would save me significant effort
+        - Nice to have
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Links, references to other tools, or any other useful details.
