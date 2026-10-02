@@ -38,3 +38,40 @@ jobs:
 
       - name: Verify CLI entry point
         run: pydefender --help
+
+  pyinstaller-smoke:
+    name: PyInstaller --onefile smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package, pytest and PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+          python -m pip install pytest pyinstaller
+
+      - name: Protect the PyInstaller fixture project
+        run: |
+          pydefender obfuscate tests/fixtures/pyinstaller_project/main.py \
+            -o smoke_dist/main.py --level 2 --force
+          cp tests/fixtures/pyinstaller_project/helper_ops.py smoke_dist/
+
+      - name: Build --onefile bundle
+        # Dynamic imports (importlib.import_module of stdlib "json") are
+        # invisible to static analysis in the ORIGINAL file too, so the
+        # --hidden-import flag is required - exactly the workflow the
+        # engine's result.dependencies output supports.
+        run: pyinstaller --onefile smoke_dist/main.py --hidden-import json --distpath smoke_out --workpath smoke_build --specpath smoke_build --noconfirm
+
+      - name: Run the frozen application
+        run: |
+          output="$(./smoke_out/main/main)"
+          echo "$output"
+          echo "$output" | tail -1 | grep -qx 'done'

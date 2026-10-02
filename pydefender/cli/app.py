@@ -1,12 +1,8 @@
-"""Command-line interface for PyDefender.
+"""CLI implementation: argument parsing and engine invocation.
 
-The console entry point is ``pydefender:main`` (see ``pyproject.toml``).
-``main()`` returns an integer exit code:
-
-* ``0``  success
-* ``1``  runtime error (unreadable input, invalid source, ...)
-* ``2``  usage error (handled by argparse)
-* ``130`` interrupted by the user (Ctrl+C)
+There is deliberately no obfuscation logic in this module. All work is
+performed by :class:`pydefender.engine.ObfuscationEngine`, guaranteeing
+that the CLI and the Python API always behave identically.
 """
 
 from __future__ import annotations
@@ -16,38 +12,14 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
-from pydefender.obfuscator import (
-    GITHUB_URL,
-    LEVELS,
-    PyDefenderError,
-    analyze_file,
-    obfuscate_file,
-)
+from pydefender.engine import ObfuscationConfig, ObfuscationEngine
+from pydefender.engine.config import LEVELS
+from pydefender.engine.exceptions import PyDefenderError
 
 PROG = "pydefender"
 _DESCRIPTION = "PyDefender - Python source-code obfuscator and protection tool."
 
-#: Directories skipped when obfuscating a whole directory tree.
-_SKIPPED_DIRS = {
-    "__pycache__",
-    ".git",
-    ".hg",
-    ".svn",
-    ".venv",
-    "venv",
-    "env",
-    "build",
-    "dist",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    "htmlcov",
-    "node_modules",
-    ".idea",
-    ".vscode",
-    ".eggs",
-}
+_LEVEL_NAMES = {1: "light", 2: "standard", 3: "heavy"}
 
 
 def _version_string() -> str:
@@ -74,9 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
             "examples:\n"
             "  pydefender obfuscate app.py --level 3\n"
             "  pydefender obfuscate src/ -o dist/ --level 3\n"
+            "  pydefender obfuscate app.py --dry-run --integrity\n"
             "  pydefender check app.py\n"
             "\n"
-            f"project home: {GITHUB_URL}"
+            "The CLI is a thin wrapper around the PyDefender engine "
+            "(pydefender.engine.ObfuscationEngine)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -97,8 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
         "obfuscate",
         help="obfuscate a Python source file or directory",
         description="Obfuscate a Python source file or a directory tree of "
-        ".py files. The protected code is functionally identical to the "
-        "original.",
+        ".py files using the PyDefender engine. The protected code is "
+        "functionally identical to the original.",
     )
     parser_obfuscate.add_argument("input", help="Python source file or directory")
     parser_obfuscate.add_argument(
@@ -126,6 +100,54 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite existing output files without failing",
     )
     parser_obfuscate.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="run the full pipeline but do not write any output",
+    )
+    parser_obfuscate.add_argument(
+        "--integrity",
+        action="store_true",
+        help="embed a runtime integrity check (heavy loader) and report "
+        "the output checksum",
+    )
+    parser_obfuscate.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        metavar="N",
+        help="seed for reproducible output (default: 0)",
+    )
+    parser_obfuscate.add_argument(
+        "--no-reproducible",
+        action="store_true",
+        help="allow non-deterministic transformations",
+    )
+    parser_obfuscate.add_argument(
+        "--no-rename",
+        action="store_true",
+        help="disable identifier renaming",
+    )
+    parser_obfuscate.add_argument(
+        "--no-strings",
+        action="store_true",
+        help="disable string-literal protection",
+    )
+    parser_obfuscate.add_argument(
+        "--no-constants",
+        action="store_true",
+        help="disable numeric-constant protection",
+    )
+    parser_obfuscate.add_argument(
+        "--no-control-flow",
+        action="store_true",
+        help="disable control-flow protection",
+    )
+    parser_obfuscate.add_argument(
+        "--no-metadata",
+        action="store_true",
+        help="keep docstrings (disable metadata reduction)",
+    )
+    parser_obfuscate.add_argument(
         "--quiet",
         action="store_true",
         help="suppress progress output",
@@ -151,101 +173,64 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _should_skip(directory: Path) -> bool:
-    """Return True if ``directory`` should be excluded from directory scans."""
-    return directory.name in _SKIPPED_DIRS or directory.name.startswith(".")
+def _build_config(args: argparse.Namespace) -> ObfuscationConfig:
+    """Translate CLI flags into an engine configuration."""
+    return ObfuscationConfig(
+        level=args.level,
+        rename=False if args.no_rename else None,
+        strings=False if args.no_strings else None,
+        constants=False if args.no_constants else None,
+        control_flow=False if args.no_control_flow else None,
+        metadata=False if args.no_metadata else None,
+        integrity=args.integrity,
+        reproducible=not args.no_reproducible,
+        seed=max(0, args.seed),
+        dry_run=args.dry_run,
+    )
 
 
-def _collect_python_files(input_dir: Path):
-    """Recursively collect ``*.py`` files under ``input_dir``."""
-    for path in sorted(input_dir.rglob("*.py")):
-        if any(_should_skip(parent) for parent in path.relative_to(input_dir).parents):
-            continue
-        yield path
-
-
-def _resolve_output(args: argparse.Namespace, input_path: Path) -> Path:
-    """Resolve the output path for a single-file obfuscation."""
-    if args.in_place:
-        return input_path
-    if args.output:
-        output = Path(args.output)
-        if output.is_dir():
-            return output / f"{input_path.stem}_protected.py"
-        return output
-    return input_path.with_name(f"{input_path.stem}_protected.py")
-
-
-def _obfuscate_single(args: argparse.Namespace, input_path: Path) -> int:
-    """Obfuscate one file and print a progress line."""
-    output = _resolve_output(args, input_path)
-    if not args.in_place and output.exists() and not args.force:
-        raise PyDefenderError(f"output already exists (use --force to overwrite): {output}")
-    written = obfuscate_file(input_path, output, level=args.level)
-    if not args.quiet:
+def _print_result(args: argparse.Namespace, result) -> None:
+    if args.quiet:
+        return
+    for source_file, destination in result.files:
+        print(f"  {source_file} -> {destination}")
+    if result.input_path is not None and result.input_path.is_file():
         print(
-            f"{PROG}: {input_path} -> {written} "
-            f"(level {args.level}: {LEVELS[args.level]})"
+            f"{PROG}: {result.input_path} -> {result.output_path} "
+            f"(level {result.level}: {_LEVEL_NAMES.get(result.level, '?')})"
         )
-    return 0
-
-
-def _obfuscate_directory(args: argparse.Namespace, input_dir: Path) -> int:
-    """Obfuscate every ``*.py`` file below ``input_dir``."""
-    if args.in_place:
-        output_dir = input_dir
-    elif args.output:
-        output_dir = Path(args.output)
-    else:
-        raise PyDefenderError(
-            "obfuscating a directory requires --output DIRECTORY (or --in-place)"
-        )
-
-    files = list(_collect_python_files(input_dir))
-    if not files:
-        raise PyDefenderError(f"no Python files found under: {input_dir}")
-
-    count = 0
-    for source_file in files:
-        relative = source_file.relative_to(input_dir)
-        destination = output_dir / relative
-        same_file = destination.exists() and destination.resolve() == source_file.resolve()
-        if (
-            not args.in_place
-            and not same_file
-            and destination.exists()
-            and not args.force
-        ):
-            raise PyDefenderError(
-                f"output already exists (use --force to overwrite): {destination}"
-            )
-        obfuscate_file(source_file, destination, level=args.level)
-        count += 1
-        if not args.quiet:
-            print(f"  {source_file} -> {destination}")
-
-    if not args.quiet:
+    if result.files:
         print(
-            f"{PROG}: protected {count} file(s) -> {output_dir} "
-            f"(level {args.level}: {LEVELS[args.level]})"
+            f"{PROG}: protected {len(result.files)} file(s) -> {result.output_path} "
+            f"(level {result.level}: {_LEVEL_NAMES.get(result.level, '?')})"
         )
-    return 0
+    if not args.quiet and result.warnings:
+        for warning in result.warnings:
+            print(f"{PROG}: warning: {warning}", file=sys.stderr)
 
 
 def _run_obfuscate(args: argparse.Namespace) -> int:
-    """Handle the ``obfuscate`` subcommand."""
+    """Handle the ``obfuscate`` subcommand via the engine."""
+    engine = ObfuscationEngine(_build_config(args))
     input_path = Path(args.input)
-    if not input_path.exists():
-        raise PyDefenderError(f"input path does not exist: {input_path}")
-    if input_path.is_dir():
-        return _obfuscate_directory(args, input_path)
-    return _obfuscate_single(args, input_path)
+    if args.in_place:
+        output_path = input_path
+        overwrite = True
+    else:
+        output_path = args.output
+        overwrite = args.force
+    result = engine.obfuscate(input_path, output_path, overwrite=overwrite)
+    _print_result(args, result)
+    if not args.quiet:
+        print(result)
+    return 0
 
 
 def _run_check(args: argparse.Namespace) -> int:
-    """Handle the ``check`` subcommand."""
+    """Handle the ``check`` subcommand via the engine."""
+    engine = ObfuscationEngine()
     input_path = Path(args.input)
-    report = analyze_file(input_path)
+    report = engine.analyze(input_path)
     recommended = report["recommended_level"]
     print(f"PyDefender protection report: {input_path}")
     print(f"  lines              : {report['lines']}")
@@ -254,14 +239,17 @@ def _run_check(args: argparse.Namespace) -> int:
     print(f"  imports            : {report['imports']}")
     print(f"  comments           : {report['comments']}")
     print(f"  docstrings         : {report['docstrings']} of {report['scopes']} scopes")
-    print(f"  recommended level  : {recommended} ({LEVELS[recommended]})")
+    print(f"  recommended level  : {recommended} ({_LEVEL_NAMES.get(recommended, '?')})")
     return 0
 
 
 def _run_version(args: argparse.Namespace) -> int:
     """Handle the ``version`` subcommand."""
-    print(f"PyDefender {_version_string()}")
-    print(GITHUB_URL)
+    engine = ObfuscationEngine()
+    info = engine.detect_environment()
+    print(f"PyDefender {info.engine_version}")
+    print(f"python {info.python_version} ({info.python_implementation})")
+    print("https://github.com/ziroxisnothere/PyDefender")
     return 0
 
 
